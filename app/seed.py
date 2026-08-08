@@ -19,10 +19,10 @@ def seed_database(force=False):
             print("Database already seeded. Skipping.")
             return
         
-        # Clear existing data to ensure clean state
-        db.query(Seat).delete()
-        db.query(SeatHold).delete()
+        # Clear existing data to ensure clean state (respect foreign keys)
         db.query(Booking).delete()
+        db.query(SeatHold).delete()
+        db.query(Seat).delete()
         db.query(Showtime).delete()
         db.query(Theatre).delete()
         db.query(Movie).delete()
