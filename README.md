@@ -11,6 +11,10 @@ The core goal is simple:
 - **Frontend**: [cinemaseat.onrender.com/frontend](https://cinemaseat.onrender.com/frontend)
 - **Health Check**: [cinemaseat.onrender.com/health](https://cinemaseat.onrender.com/health)
 
+## Demo Video
+
+[Watch Demo Video](cinemaseat.mp4)
+
 ## Tech Stack
 
 - **Backend**: FastAPI, Python
