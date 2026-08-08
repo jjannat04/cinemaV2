@@ -726,6 +726,9 @@
 
         async function holdSeat() {
             if (!selectedSeat || !selectedShowtime) return;
+            const holdButton = document.getElementById('hold-seat');
+            const payButton = document.getElementById('pay-seat');
+            const originalHoldText = holdButton.textContent;
             
             const phone = document.getElementById('phone').value;
             if (!phone || phone.length < 11) {
@@ -734,6 +737,11 @@
             }
             
             try {
+                holdButton.disabled = true;
+                holdButton.textContent = 'Holding seat...';
+                payButton.disabled = true;
+                showStatus('Holding seat...', 'info');
+
                 const response = await fetch(`${API_BASE}/seats/${selectedShowtime.id}/hold`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -746,18 +754,25 @@
                 if (response.status === 201) {
                     const data = await response.json();
                     currentHoldId = data.hold_id;
-                    document.getElementById('hold-seat').disabled = true;
-                    document.getElementById('pay-seat').disabled = false;
+                    holdButton.disabled = true;
+                    holdButton.textContent = 'Seat Held';
+                    payButton.disabled = false;
                     showStatus('Seat held successfully! Payment required within 5 minutes.', 'success');
                     
                     // Refresh seats to show held status
                     await fetchSeats(selectedShowtime.id);
                 } else if (response.status === 409) {
+                    holdButton.disabled = false;
+                    holdButton.textContent = originalHoldText;
                     showStatus('This seat is already held by another user', 'error');
                 } else {
+                    holdButton.disabled = false;
+                    holdButton.textContent = originalHoldText;
                     showStatus('Failed to hold seat. Please try again.', 'error');
                 }
             } catch (error) {
+                holdButton.disabled = false;
+                holdButton.textContent = originalHoldText;
                 showStatus('Failed to hold seat. Please try again.', 'error');
                 console.error('Error holding seat:', error);
             }
@@ -765,11 +780,17 @@
 
         async function payForSeat() {
             if (!currentHoldId) return;
+            const payButton = document.getElementById('pay-seat');
+            const holdButton = document.getElementById('hold-seat');
+            const originalPayText = payButton.textContent;
             
             const phone = document.getElementById('phone').value;
             const callbackUrl = `${API_BASE.replace('localhost', 'app')}/bookings/callback`;
             
             try {
+                payButton.disabled = true;
+                payButton.textContent = 'Processing payment...';
+                holdButton.disabled = true;
                 showStatus('Processing payment... This may take 2-15 seconds.', 'info');
                 
                 const response = await fetch(`${API_BASE}/bookings/${currentHoldId}/pay`, {
@@ -787,19 +808,25 @@
                     showStatus('Payment initiated! Waiting for confirmation...', 'info');
                     
                     // Poll for booking status
-                    pollBookingStatus(data.booking_id);
+                    pollBookingStatus(data.booking_id, originalPayText);
                 } else {
+                    payButton.disabled = false;
+                    payButton.textContent = originalPayText;
                     showStatus('Failed to initiate payment. Please try again.', 'error');
                 }
             } catch (error) {
+                payButton.disabled = false;
+                payButton.textContent = originalPayText;
                 showStatus('Failed to process payment. Please try again.', 'error');
                 console.error('Error processing payment:', error);
             }
         }
 
-        async function pollBookingStatus(bookingId) {
+        async function pollBookingStatus(bookingId, originalPayText = 'ðŸ’³ Pay for Seat') {
             const maxAttempts = 30; // 30 seconds max wait
             let attempts = 0;
+            const payButton = document.getElementById('pay-seat');
+            const holdButton = document.getElementById('hold-seat');
             
             const poll = setInterval(async () => {
                 attempts++;
@@ -814,14 +841,19 @@
                         document.getElementById('booking-form').classList.add('hidden');
                         selectedSeat = null;
                         currentHoldId = null;
+                        payButton.textContent = originalPayText;
                         await fetchSeats(selectedShowtime.id);
                     } else if (booking.status === 'failed') {
                         clearInterval(poll);
+                        payButton.disabled = false;
+                        payButton.textContent = originalPayText;
+                        holdButton.disabled = false;
+                        holdButton.textContent = 'Hold Seat';
                         showStatus('Payment failed. Please try again.', 'error');
-                        document.getElementById('hold-seat').disabled = false;
-                        document.getElementById('pay-seat').disabled = true;
                     } else if (attempts >= maxAttempts) {
                         clearInterval(poll);
+                        payButton.disabled = false;
+                        payButton.textContent = originalPayText;
                         showStatus('Payment is taking longer than expected. Please check your booking status.', 'warning');
                     }
                 } catch (error) {
