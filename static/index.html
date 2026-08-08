@@ -755,7 +755,7 @@
                     const data = await response.json();
                     currentHoldId = data.hold_id;
                     holdButton.disabled = true;
-                    holdButton.textContent = 'Seat Held';
+                    holdButton.textContent = 'Hold Seat';
                     payButton.disabled = false;
                     showStatus('Seat held successfully! Payment required within 5 minutes.', 'success');
                     
