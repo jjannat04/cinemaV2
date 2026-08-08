@@ -102,6 +102,8 @@ async def test_concurrent_seat_hold():
     )
     db.add(seat)
     db.commit()
+    showtime_id = showtime.id
+    seat_id = seat.id
     db.close()
     
     async with AsyncClient(app=app, base_url="http://test") as ac:
@@ -109,9 +111,9 @@ async def test_concurrent_seat_hold():
         tasks = []
         for i in range(10):
             task = ac.post(
-                f"/seats/{showtime.id}/hold",
+                f"/seats/{showtime_id}/hold",
                 json={
-                    "seat_id": seat.id,
+                    "seat_id": seat_id,
                     "user_identifier": f"user_{i}"
                 }
             )
@@ -129,7 +131,7 @@ async def test_concurrent_seat_hold():
     
     # Verify seat is held
     db = TestingSessionLocal()
-    held_seat = db.query(Seat).filter(Seat.id == seat.id).first()
+    held_seat = db.query(Seat).filter(Seat.id == seat_id).first()
     assert held_seat.status == SeatStatus.HELD
     db.close()
     
@@ -187,6 +189,8 @@ async def test_duplicate_callback():
     )
     db.add(booking)
     db.commit()
+    booking_id = booking.id
+    seat_id = seat.id
     db.close()
     
     async with AsyncClient(app=app, base_url="http://test") as ac:
@@ -196,7 +200,7 @@ async def test_duplicate_callback():
             json={
                 "event_id": "evt_001",
                 "payment_id": "pay_test_123",
-                "booking_ref": str(booking.id),
+                "booking_ref": str(booking_id),
                 "status": "SUCCEEDED",
                 "amount": 10.00
             }
@@ -208,7 +212,7 @@ async def test_duplicate_callback():
             json={
                 "event_id": "evt_001",
                 "payment_id": "pay_test_123",
-                "booking_ref": str(booking.id),
+                "booking_ref": str(booking_id),
                 "status": "SUCCEEDED",
                 "amount": 10.00
             }
@@ -220,12 +224,12 @@ async def test_duplicate_callback():
     
     # Verify booking is confirmed
     db = TestingSessionLocal()
-    confirmed_booking = db.query(Booking).filter(Booking.id == booking.id).first()
+    confirmed_booking = db.query(Booking).filter(Booking.id == booking_id).first()
     assert confirmed_booking.status == BookingStatus.CONFIRMED
     assert confirmed_booking.callback_received == True
     
     # Verify seat is booked
-    booked_seat = db.query(Seat).filter(Seat.id == seat.id).first()
+    booked_seat = db.query(Seat).filter(Seat.id == seat_id).first()
     assert booked_seat.status == SeatStatus.BOOKED
     db.close()
     
@@ -257,9 +261,10 @@ def test_hold_expiration(db, client):
     seat.status = SeatStatus.HELD
     db.commit()
     
-    # Run cleanup
-    from app.tasks import cleanup_expired_holds
-    cleanup_expired_holds()
+    # Run request-path cleanup against the same test DB session.
+    from app.tasks import release_expired_holds_in_session
+    release_expired_holds_in_session(db, showtime_id=showtime_id)
+    db.commit()
     
     # Verify hold is deactivated and seat is available
     db.refresh(expired_hold)
