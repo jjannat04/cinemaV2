@@ -307,7 +307,9 @@ cinemaseat/
 
 ## CI/CD
 
-GitHub Actions is configured to run tests on pushes and pull requests. Render deployment is connected separately to the GitHub repository and deploys the app from the selected branch.
+GitHub Actions is configured and passing. The pipeline runs tests on pushes and pull requests, then builds the Docker image and verifies the Docker Compose stack with a `/health` check.
+
+Render deployment is connected separately to the GitHub repository and deploys the app from the selected branch.
 
 The CI test database uses a temporary PostgreSQL service container in GitHub Actions. It does not use the production/Render database.
 
