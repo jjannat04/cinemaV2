@@ -8,17 +8,15 @@ The core goal is simple:
 
 ## Live Demo
 
-- **Render URL**: `PASTE_RENDER_DEPLOYMENT_LINK_HERE`
-- **Frontend**: `PASTE_RENDER_DEPLOYMENT_LINK_HERE/frontend`
-- **Health Check**: `PASTE_RENDER_DEPLOYMENT_LINK_HERE/health`
+- **Frontend**: [cinemaseat.onrender.com/frontend](https://cinemaseat.onrender.com/frontend)
+- **Health Check**: [cinemaseat.onrender.com/health](https://cinemaseat.onrender.com/health)
 
 ## Frontend Screenshots
 
 Replace these placeholders with screenshots from the deployed frontend.
 
-![CinemaSeat frontend - movie and showtime selection](docs/images/frontend-movies.png)
 
-![CinemaSeat frontend - seat map and booking flow](docs/images/frontend-seat-map.png)
+![CinemaSeat frontend - seat map and booking flow](docs/image.png)
 
 ## Tech Stack
 
@@ -84,14 +82,14 @@ The health endpoint returns without calling the gateway, so it stays fast even i
 
 ## Environment Variables
 
-| Variable | Purpose | Default / Example |
-| --- | --- | --- |
-| `DATABASE_URL` | PostgreSQL connection string | `postgresql://postgres:postgres@db:5432/cinemaseat` |
-| `GATEWAY_URL` | Mock gateway base URL | `http://gateway:9000` |
-| `HOLD_TTL_SECONDS` | Seat hold duration | `300` |
-| `MOCK_PAYMENT` | Optional local mock payment mode | `false` |
-| `GATEWAY_TEST_MODE` | Sends deterministic gateway header when set | `deterministic` |
-| `TEST_RETRY_LOGIC` | Callback retry testing flag | `false` |
+| Variable              | Purpose                                     | Default / Example                                     |
+| --------------------- | ------------------------------------------- | ----------------------------------------------------- |
+| `DATABASE_URL`      | PostgreSQL connection string                | `postgresql://postgres:postgres@db:5432/cinemaseat` |
+| `GATEWAY_URL`       | Mock gateway base URL                       | `http://gateway:9000`                               |
+| `HOLD_TTL_SECONDS`  | Seat hold duration                          | `300`                                               |
+| `MOCK_PAYMENT`      | Optional local mock payment mode            | `false`                                             |
+| `GATEWAY_TEST_MODE` | Sends deterministic gateway header when set | `deterministic`                                     |
+| `TEST_RETRY_LOGIC`  | Callback retry testing flag                 | `false`                                             |
 
 Example short hold expiry run:
 
@@ -172,17 +170,17 @@ If the seat is already held or booked:
 
 ## Other API Endpoints
 
-| Method | Endpoint | Purpose |
-| --- | --- | --- |
-| `GET` | `/health` | Health check |
-| `GET` | `/movies` | List movies |
-| `GET` | `/movies/{movie_id}/showtimes` | List showtimes for a movie |
-| `GET` | `/seats/{showtime_id}` | Fetch seat map |
-| `POST` | `/seats/{showtime_id}/hold` | Hold a seat |
-| `POST` | `/bookings/{hold_id}/pay` | Start payment |
-| `POST` | `/bookings/callback` | Gateway callback |
-| `GET` | `/bookings/{booking_id}` | Fetch booking status |
-| `GET` | `/frontend` | Minimal frontend |
+| Method   | Endpoint                         | Purpose                    |
+| -------- | -------------------------------- | -------------------------- |
+| `GET`  | `/health`                      | Health check               |
+| `GET`  | `/movies`                      | List movies                |
+| `GET`  | `/movies/{movie_id}/showtimes` | List showtimes for a movie |
+| `GET`  | `/seats/{showtime_id}`         | Fetch seat map             |
+| `POST` | `/seats/{showtime_id}/hold`    | Hold a seat                |
+| `POST` | `/bookings/{hold_id}/pay`      | Start payment              |
+| `POST` | `/bookings/callback`           | Gateway callback           |
+| `GET`  | `/bookings/{booking_id}`       | Fetch booking status       |
+| `GET`  | `/frontend`                    | Minimal frontend           |
 
 ## Payment Flow
 
