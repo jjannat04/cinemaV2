@@ -1,3 +1,12 @@
+# app/seed.py
+import os
+import sys
+
+# Add root directory to sys.path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Now your original imports will work:
+from app.database import get_db_context
 from datetime import datetime, timedelta
 from app.database import get_db_context
 from app.models import Movie, Theatre, Showtime, Seat, SeatStatus, SeatHold, Booking
