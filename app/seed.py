@@ -6,13 +6,14 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Now your original imports will work:
-from app.database import get_db_context
+from app.database import get_db_context, init_db
 from datetime import datetime, timedelta
 from app.database import get_db_context
 from app.models import Movie, Theatre, Showtime, Seat, SeatStatus, SeatHold, Booking
 
 def seed_database(force=False):
     """Populate database with sample data"""
+    init_db()
     with get_db_context() as db:
         # Check if data already exists (check for movies)
         if not force and db.query(Movie).count() > 0:
