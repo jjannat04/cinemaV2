@@ -1,123 +1,125 @@
-# CinemaSeat - Movie Ticket Booking System
+# CinemaSeat
 
-A scalable cinema ticket booking system that handles high concurrency without double-booking seats.
+CinemaSeat is a movie ticket booking system built for high-demand showtimes where many users may try to reserve the same seat at the same time.
+
+The core goal is simple:
+
+> Never sell the same seat twice.
+
+## Live Demo
+
+- **Render URL**: `PASTE_RENDER_DEPLOYMENT_LINK_HERE`
+- **Frontend**: `PASTE_RENDER_DEPLOYMENT_LINK_HERE/frontend`
+- **Health Check**: `PASTE_RENDER_DEPLOYMENT_LINK_HERE/health`
+
+## Frontend Screenshots
+
+Replace these placeholders with screenshots from the deployed frontend.
+
+![CinemaSeat frontend - movie and showtime selection](docs/images/frontend-movies.png)
+
+![CinemaSeat frontend - seat map and booking flow](docs/images/frontend-seat-map.png)
 
 ## Tech Stack
-- **Backend**: Python + FastAPI
-- **Database**: PostgreSQL (with row locks for concurrency control)
-- **Payment Gateway**: Mock gateway (asifmahmoud414/mock-gateway:latest)
-- **Containerization**: Docker + Docker Compose
-- **Testing**: Pytest with async support
+
+- **Backend**: FastAPI, Python
+- **Database**: PostgreSQL
+- **ORM**: SQLAlchemy
+- **Payment Gateway**: `asifmahmoud414/mock-gateway:latest`
+- **Containerization**: Docker, Docker Compose
+- **CI**: GitHub Actions
+- **Deployment**: Render
+
+## What Works
+
+- Movie listing
+- Showtime listing
+- Live seat map
+- Temporary seat hold
+- Hold expiry using `HOLD_TTL_SECONDS`
+- Payment initiation through the provided gateway
+- Gateway callback handling
+- Duplicate callback handling
+- Race callback handling using `booking_ref`
+- Docker Compose local startup
+- Render deployment
 
 ## Quick Start
 
 ### Prerequisites
-- Docker and Docker Compose installed
 
-### Running the Application
+- Docker
+- Docker Compose
+
+### Run Locally
+
 ```bash
-docker-compose up
+docker compose up --build
 ```
 
-The API will be available at `http://localhost:8000`
-The mock gateway will be available at `http://localhost:9000`
+The services will be available at:
+
+- API: `http://localhost:8000`
+- Frontend: `http://localhost:8000/frontend`
+- Gateway: `http://localhost:9000`
+
+The app seeds sample movies, showtimes, theatres, and seats during startup.
 
 ### Health Check
+
 ```bash
 curl http://localhost:8000/health
 ```
 
-### Frontend
-Access the frontend at `http://localhost:8000/frontend`
+Expected response:
 
-The app seeds sample movies, showtimes and seats automatically during container startup.
-
-## Project Structure
-```
-cinemaseat/
-|-- app/
-|   |-- main.py          # FastAPI application
-|   |-- config.py        # Configuration settings
-|   `-- models.py        # Database models
-|-- tests/               # Test files
-|-- docker/
-|   `-- Dockerfile       # Application container
-|-- docker-compose.yml   # Multi-container setup
-`-- requirements.txt     # Python dependencies
-```
-
-## Required Environment Variables
-- `DATABASE_URL`: PostgreSQL connection string
-- `GATEWAY_URL`: Mock payment gateway URL (for local Docker deployment)
-- `HOLD_TTL_SECONDS`: Seat hold timeout in seconds (default: 300)
-- `MOCK_PAYMENT`: Set to `true` to use mock payment without real gateway (for cloud deployment)
-- `GATEWAY_TEST_MODE`: Set to `deterministic` for reliable testing with gateway
-- `TEST_RETRY_LOGIC`: Set to `true` to test gateway retry logic (returns 500 from callback)
-
-### Render Deployment Environment Variables
-For Render deployment, add these environment variables:
-```
-DATABASE_URL=postgresql://user:password@host:port/database
-GATEWAY_URL=https://your-gateway-service.onrender.com  # Optional: only if deploying gateway separately
-HOLD_TTL_SECONDS=300
-MOCK_PAYMENT=true  # Use mock payment on Render (recommended for hackathon)
-TEST_RETRY_LOGIC=false  # Keep false in production
-```
-
-## Development
-
-### Local Development
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Run locally (requires PostgreSQL running)
-uvicorn app.main:app --reload
-```
-
-## API Endpoints
-
-### Required Endpoints (for judging)
-- `GET /health` - Health check (returns 200 in under 1 second)
-- `GET /seats/{showtime_id}` - Get seat map for a showtime
-- `POST /seats/{showtime_id}/hold` - Hold a specific seat
-
-### Exact Request Formats (for judging)
-
-#### Hold a Seat
-```bash
-POST /seats/{showtime_id}/hold
-Content-Type: application/json
-
-{
-  "seat_id": 123,
-  "user_identifier": "user_session_id_or_user_id"
-}
-```
-
-Response (201 Created):
 ```json
 {
-  "hold_id": 456,
-  "seat_id": 123,
-  "row_letter": "F",
-  "seat_number": 12,
-  "hold_expires_at": "2026-08-08T10:05:00Z",
-  "status": "held"
+  "status": "healthy",
+  "timestamp": "..."
 }
 ```
 
-#### Get Seat Map
+The health endpoint returns without calling the gateway, so it stays fast even if the gateway is unavailable.
+
+## Environment Variables
+
+| Variable | Purpose | Default / Example |
+| --- | --- | --- |
+| `DATABASE_URL` | PostgreSQL connection string | `postgresql://postgres:postgres@db:5432/cinemaseat` |
+| `GATEWAY_URL` | Mock gateway base URL | `http://gateway:9000` |
+| `HOLD_TTL_SECONDS` | Seat hold duration | `300` |
+| `MOCK_PAYMENT` | Optional local mock payment mode | `false` |
+| `GATEWAY_TEST_MODE` | Sends deterministic gateway header when set | `deterministic` |
+| `TEST_RETRY_LOGIC` | Callback retry testing flag | `false` |
+
+Example short hold expiry run:
+
 ```bash
+HOLD_TTL_SECONDS=3 docker compose up --build
+```
+
+## Judging Endpoints
+
+### Fetch Seat Map
+
+```http
 GET /seats/{showtime_id}
 ```
 
-Response (200 OK):
+Example:
+
+```bash
+curl http://localhost:8000/seats/1
+```
+
+Response shape:
+
 ```json
 {
   "showtime_id": 1,
   "movie_title": "Spider-Man: Brand New Day",
-  "start_time": "2026-08-09T20:00:00Z",
+  "start_time": "2026-08-09T20:00:00",
   "seats": [
     {
       "id": 1,
@@ -125,50 +127,80 @@ Response (200 OK):
       "row_letter": "A",
       "seat_number": 1,
       "status": "available",
-      "price": 15.00
+      "price": 15.0
     }
   ]
 }
 ```
 
-### Additional Endpoints
-- `GET /movies` - List all movies
-- `GET /movies/{movie_id}/showtimes` - Get showtimes for a movie
-- `POST /bookings/{hold_id}/pay` - Initiate payment for a held seat
-- `POST /bookings/callback` - Payment gateway callback endpoint
-- `GET /bookings/{booking_id}` - Get booking details
-- `GET /frontend` - Access the web frontend
+### Hold a Seat
 
-## Payment Gateway Integration
+```http
+POST /seats/{showtime_id}/hold
+Content-Type: application/json
+```
 
-**Gateway**: asifmahmoud414/mock-gateway:latest
+Example:
 
-**Gateway behavior implemented**: real `/charge` integration, background payment initiation, idempotent callbacks, and race-mode callback lookup by `booking_ref`.
+```bash
+curl -X POST http://localhost:8000/seats/1/hold \
+  -H "Content-Type: application/json" \
+  -d '{
+    "seat_id": 1,
+    "user_identifier": "user_1"
+  }'
+```
 
-### Required Behaviors
+Success response:
 
-1. **Async Payment Handler**: `/pay` returns `202` after creating a pending booking; gateway charging runs in the background.
-2. **200 for Duplicate Callbacks**: Callback handler acknowledges duplicate/unknown events to avoid retry storms.
-3. **Idempotent Callbacks**: Uses `event_id` and booking status checks for deduplication.
-4. **Race Callback Support**: Falls back to gateway `booking_ref` if the callback arrives before `payment_id` is saved.
-5. **Gateway Failure Handling**: Failed/timeout charge attempts mark the booking failed and release the held seat.
-6. **No Double-Booking Goal**: Seat holds use PostgreSQL row locking and payment callbacks only confirm an existing pending booking.
+```json
+{
+  "hold_id": 1,
+  "seat_id": 1,
+  "row_letter": "A",
+  "seat_number": 1,
+  "hold_expires_at": "2026-08-08T10:05:00",
+  "status": "held"
+}
+```
 
-### Control Headers Support
+If the seat is already held or booked:
 
-Environment variable `GATEWAY_TEST_MODE=deterministic` adds `X-Mock-Mode: deterministic` header for reliable testing.
+```http
+409 Conflict
+```
 
-### Gateway Misbehavior Handling
+## Other API Endpoints
 
-- **10% Failure Rate**: Booking marked as failed, seat released.
-- **8% Duplicate Rate**: Handled via event ID and booking status checks.
-- **2% Timeout Rate**: Background charge task marks pending booking failed if no callback succeeded.
-- **2-15 Second Delays**: `/pay` does not wait for final callback completion.
-- **Race callback**: Callback can confirm by `booking_ref` before `/charge` returns.
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Health check |
+| `GET` | `/movies` | List movies |
+| `GET` | `/movies/{movie_id}/showtimes` | List showtimes for a movie |
+| `GET` | `/seats/{showtime_id}` | Fetch seat map |
+| `POST` | `/seats/{showtime_id}/hold` | Hold a seat |
+| `POST` | `/bookings/{hold_id}/pay` | Start payment |
+| `POST` | `/bookings/callback` | Gateway callback |
+| `GET` | `/bookings/{booking_id}` | Fetch booking status |
+| `GET` | `/frontend` | Minimal frontend |
 
-### Payment Response
+## Payment Flow
 
-`POST /bookings/{hold_id}/pay` returns immediately with a pending booking. `payment_id` may be `null` until the gateway `/charge` response or callback is processed.
+`POST /bookings/{hold_id}/pay` creates a pending booking and returns `202 Accepted` quickly. The gateway charge runs in the background, and the final booking state is updated through `/bookings/callback`.
+
+Example request:
+
+```bash
+curl -X POST http://localhost:8000/bookings/1/pay \
+  -H "Content-Type: application/json" \
+  -d '{
+    "hold_id": 1,
+    "phone": "01700000000",
+    "callback_url": "http://app:8000/bookings/callback"
+  }'
+```
+
+Example response:
 
 ```json
 {
@@ -179,13 +211,133 @@ Environment variable `GATEWAY_TEST_MODE=deterministic` adds `X-Mock-Mode: determ
 }
 ```
 
+The callback handler is idempotent:
+
+- Duplicate callbacks return `200`
+- Already processed bookings are not confirmed twice
+- Failed payments release the seat
+- Race callbacks can be matched using `booking_ref`
+
 ## Concurrency Strategy
-- PostgreSQL row locks for seat holding
-- Idempotent callback handling to prevent duplicate bookings
-- Expired holds are released from request paths as well as the periodic cleanup thread
 
-## Required Proof Still To Run Before Submission
+CinemaSeat uses PostgreSQL row-level locking for seat holds.
 
-- Scenario A: fire 100 concurrent hold requests for one exact seat; report 1 success, 99 clean rejections, oversell 0.
-- Scenario B: run with short `HOLD_TTL_SECONDS`, hold a seat, wait for expiry, show it becomes available and can be booked by another user.
-- Gateway forced modes: test duplicate, fail, timeout and race headers against the real gateway container.
+When a user tries to hold a seat, the backend locks the target seat row, checks whether it is available, creates a hold, and updates the seat status in the same transaction. Concurrent requests for the same seat are serialized by PostgreSQL.
+
+Expected behavior under contention:
+
+```text
+100 users request the same seat
+1 request succeeds
+99 requests receive 409 Conflict
+0 oversell
+```
+
+## Verified Proof
+
+These checks were run against the Docker/PostgreSQL stack.
+
+### Scenario A: One Seat, Many Buyers
+
+```text
+100 concurrent hold requests for the same seat
+Successful holds: 1
+Rejected holds: 99
+Other errors: 0
+Oversell count: 0
+Final seat status: held
+```
+
+### Scenario B: Abandoned Hold
+
+Run with short TTL:
+
+```bash
+HOLD_TTL_SECONDS=3 docker compose up --build
+```
+
+Observed result:
+
+```text
+First user holds seat: 201 Created
+Seat status immediately after hold: held
+Seat status after TTL: available
+Second user holds same seat: 201 Created
+```
+
+## Architecture
+
+```text
+Browser / Frontend
+        |
+        v
+FastAPI Application
+        |
+        |-- Movies
+        |-- Showtimes
+        |-- Seat Map
+        |-- Seat Hold
+        |-- Booking / Payment
+        |-- Gateway Callback
+        |
+        v
+PostgreSQL
+
+FastAPI Application
+        |
+        v
+Mock Payment Gateway
+```
+
+The project intentionally uses a monolithic backend. For the hackathon timebox, this keeps deployment, debugging, and database transactions simpler than a microservice design.
+
+## Project Structure
+
+```text
+cinemaseat/
+|-- app/
+|   |-- main.py
+|   |-- models.py
+|   |-- schemas.py
+|   |-- database.py
+|   |-- tasks.py
+|   `-- routers/
+|-- static/
+|   `-- index.html
+|-- tests/
+|-- docker/
+|   `-- Dockerfile
+|-- docker-compose.yml
+|-- requirements.txt
+|-- ARCHITECTURE.md
+|-- DECISIONS.md
+`-- DEPLOYMENT.md
+```
+
+## CI/CD
+
+GitHub Actions is configured to run tests on pushes and pull requests. Render deployment is connected separately to the GitHub repository and deploys the app from the selected branch.
+
+The CI test database uses a temporary PostgreSQL service container in GitHub Actions. It does not use the production/Render database.
+
+## Known Limitations
+
+- OTP send/verify flow is not fully completed
+- No user authentication
+- No authorization layer
+- No rate limiting
+- No gateway callback signature verification
+- Monitoring is limited to logs
+- Frontend is intentionally minimal
+
+## Future Improvements
+
+- Complete OTP verification before payment
+- Add authentication and user accounts
+- Add gateway signature verification
+- Add rate limiting for hold attempts
+- Add structured logs and request IDs
+- Add metrics endpoint
+- Add stronger PostgreSQL integration tests
+- Improve frontend UI/UX
+- Add an admin panel for movies, theatres, and showtimes

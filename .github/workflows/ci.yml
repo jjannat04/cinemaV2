@@ -68,9 +68,20 @@ jobs:
     
     - name: Test Docker Compose
       run: |
-        docker compose up -d db gateway
-        sleep 10
-        docker compose up -d app
-        sleep 5
-        curl -f http://localhost:8000/health || exit 1
+        docker compose up -d --build
+        for i in {1..30}; do
+          if curl -fsS http://localhost:8000/health; then
+            exit 0
+          fi
+          echo "Waiting for app health check... attempt $i/30"
+          docker compose ps
+          sleep 2
+        done
+        echo "App did not become healthy in time"
+        docker compose logs app
+        exit 1
+
+    - name: Clean up Docker Compose
+      if: always()
+      run: |
         docker compose down -v
