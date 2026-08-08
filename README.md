@@ -11,13 +11,6 @@ The core goal is simple:
 - **Frontend**: [cinemaseat.onrender.com/frontend](https://cinemaseat.onrender.com/frontend)
 - **Health Check**: [cinemaseat.onrender.com/health](https://cinemaseat.onrender.com/health)
 
-## Frontend Screenshots
-
-Replace these placeholders with screenshots from the deployed frontend.
-
-
-![CinemaSeat frontend - seat map and booking flow](docs/image.png)
-
 ## Tech Stack
 
 - **Backend**: FastAPI, Python
