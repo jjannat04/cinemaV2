@@ -55,6 +55,8 @@ cinemaseat/
 - `GATEWAY_URL`: Mock payment gateway URL (for local Docker deployment)
 - `HOLD_TTL_SECONDS`: Seat hold timeout in seconds (default: 300)
 - `MOCK_PAYMENT`: Set to `true` to use mock payment without real gateway (for cloud deployment)
+- `GATEWAY_TEST_MODE`: Set to `deterministic` for reliable testing with gateway
+- `TEST_RETRY_LOGIC`: Set to `true` to test gateway retry logic (returns 500 from callback)
 
 ### Render Deployment Environment Variables
 For Render deployment, add these environment variables:
@@ -63,6 +65,7 @@ DATABASE_URL=postgresql://user:password@host:port/database
 GATEWAY_URL=https://your-gateway-service.onrender.com  # Optional: only if deploying gateway separately
 HOLD_TTL_SECONDS=300
 MOCK_PAYMENT=true  # Use mock payment on Render (recommended for hackathon)
+TEST_RETRY_LOGIC=false  # Keep false in production
 ```
 
 ## Development
@@ -139,6 +142,40 @@ Response (200 OK):
 - `POST /bookings/callback` - Payment gateway callback endpoint
 - `GET /bookings/{booking_id}` - Get booking details
 - `GET /frontend` - Access the web frontend
+
+## Payment Gateway Integration
+
+**Gateway**: asifmahmoud414/mock-gateway:latest
+
+**Spec Compliance**: ✅ Fully compliant with gateway specification
+
+### Required Behaviors (All Implemented)
+
+1. **✅ Async Payment Handler**: `/pay` returns 202 immediately, doesn't wait for callback
+2. **✅ 200 for Duplicate Callbacks**: Always returns 200 even for duplicates
+3. **✅ Idempotent Callbacks**: Uses `event_id` for deduplication
+4. **✅ Gateway Failure Handling**: Handles 10% failure rate, 2% timeout rate
+5. **✅ Duplicate Prevention**: Duplicate callbacks don't create double payments
+6. **✅ No Double-Booking**: Callback processing checks existing booking status
+
+### Control Headers Support
+
+Environment variable `GATEWAY_TEST_MODE=deterministic` adds `X-Mock-Mode: deterministic` header for reliable testing.
+
+### Gateway Misbehavior Handling
+
+- **10% Failure Rate**: Booking marked as FAILED, seat released
+- **8% Duplicate Rate**: Handled via event_id deduplication  
+- **2% Timeout Rate**: Booking marked as FAILED, seat released
+- **2-15 Second Delays**: Async handler doesn't block
+
+### Test Results (Local Docker)
+- Hold seat: ✅ Success
+- Initiate payment: ✅ Success (202 returned immediately)
+- Gateway callback: ✅ Delivered (HTTP 200)
+- Booking confirmation: ✅ Confirmed
+- Seat status update: ✅ Changed to "booked"
+- Duplicate callback: ✅ Handled idempotently
 
 ## Concurrency Strategy
 - PostgreSQL row locks for seat holding

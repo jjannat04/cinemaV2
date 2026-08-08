@@ -31,11 +31,13 @@ services:
       - GATEWAY_URL=http://gateway:9000
       - HOLD_TTL_SECONDS=300
       - MOCK_PAYMENT=false  # Set to true to use mock payment without gateway
+      - GATEWAY_TEST_MODE=deterministic  # Set to deterministic for reliable testing
+      - TEST_RETRY_LOGIC=false  # Set to true to test gateway retry logic
     depends_on:
       db:
         condition: service_healthy
       gateway:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - ./app:/app/app
 

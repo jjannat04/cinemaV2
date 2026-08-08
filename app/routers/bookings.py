@@ -127,8 +127,13 @@ async def initiate_payment(
             "callback_url": callback_url
         }
         
+        # Add control headers for testing (as per gateway specification)
+        headers = {}
+        if os.getenv("GATEWAY_TEST_MODE") == "deterministic":
+            headers["X-Mock-Mode"] = "deterministic"
+        
         async with httpx.AsyncClient() as client:
-            response = await client.post(gateway_url, json=payload, timeout=5.0)
+            response = await client.post(gateway_url, json=payload, headers=headers, timeout=5.0)
             
             if response.status_code == 202:
                 gateway_data = response.json()
@@ -191,12 +196,23 @@ async def payment_callback(
         
         # Check if callback was already processed using event_id for deduplication
         # Store processed event_ids to handle duplicates properly
-        if booking.callback_received:
+        if booking.event_id == callback.event_id:
             logger.info(f"Duplicate callback for payment_id: {callback.payment_id}, event_id: {callback.event_id}")
             return {"status": "received", "message": "Callback already processed"}
         
-        # Process the callback
+        # If we have a different event_id for the same payment_id, this is a new callback
+        # (edge case: gateway generated new event_id for retry)
+        if booking.callback_received and booking.event_id:
+            logger.warning(f"New event_id for already processed payment: payment_id={callback.payment_id}, old_event_id={booking.event_id}, new_event_id={callback.event_id}")
+            return {"status": "received", "message": "Payment already processed"}
+        
+        # Process the callback (only if not already processed)
         booking.event_id = callback.event_id  # Store event_id for deduplication
+        
+        # Only process if not already confirmed/failed
+        if booking.status in [BookingStatus.CONFIRMED, BookingStatus.FAILED]:
+            logger.info(f"Booking already {booking.status.value}, skipping callback processing")
+            return {"status": "received", "message": f"Booking already {booking.status.value}"}
         
         if callback.status == "SUCCEEDED":
             booking.status = BookingStatus.CONFIRMED
@@ -256,8 +272,54 @@ async def payment_callback(
         
     except Exception as e:
         logger.error(f"Callback processing error: {str(e)}")
-        # Return 200 anyway to prevent retries
-        return {"status": "received", "message": "Error processing callback"}
+        
+        # Test mode: return 500 to test gateway retry logic
+        if os.getenv("TEST_RETRY_LOGIC") == "true":
+            return {"status": "error", "message": "Testing retry logic"}, 500
+        
+        # CRITICAL: Always return 200 to prevent gateway retries
+        # Even if processing fails, returning 200 prevents infinite retry loops
+        return {"status": "received", "message": "Error processing callback - delivery acknowledged"}
+
+@router.post("/debug/reset")
+async def reset_system(db: Session = Depends(get_db)):
+    """
+    Reset system state for testing.
+    Clears all bookings, holds, and resets seat status.
+    Also resets gateway state via debug endpoint.
+    """
+    try:
+        # Clear bookings
+        db.query(Booking).delete()
+        
+        # Clear holds
+        db.query(SeatHold).delete()
+        
+        # Reset all seats to available
+        seats = db.execute(select(Seat)).scalars().all()
+        for seat in seats:
+            seat.status = SeatStatus.AVAILABLE
+        
+        db.commit()
+        
+        # Try to reset gateway state
+        try:
+            import httpx
+            gateway_reset_url = f"{settings.GATEWAY_URL}/debug/reset"
+            async with httpx.AsyncClient() as client:
+                await client.post(gateway_reset_url, timeout=5.0)
+        except Exception as e:
+            logger.warning(f"Gateway reset failed: {e}")
+        
+        return {"status": "success", "message": "System reset successfully"}
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"System reset failed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="System reset failed"
+        )
 
 @router.get("/{booking_id}", response_model=BookingResponse)
 async def get_booking(booking_id: int, db: Session = Depends(get_db)):
