@@ -13,7 +13,7 @@ The core goal is simple:
 
 ## Demo Video
 
-[Watch Demo Video](cinemaseat.mp4)
+[Watch Demo Video](https://drive.google.com/file/d/19p-eBdXwm4IulCmdi4pIwO1X2yDBY_5m/view?usp=sharing)
 
 ## Tech Stack
 
