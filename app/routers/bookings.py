@@ -8,6 +8,8 @@ from app.schemas import PaymentRequest, PaymentResponse, GatewayCallback, Bookin
 from app.config import get_settings
 import httpx
 import logging
+import os
+import asyncio
 
 router = APIRouter(prefix="/bookings", tags=["bookings"])
 settings = get_settings()
@@ -89,6 +91,23 @@ async def initiate_payment(
     db.refresh(booking)
     
     # Call payment gateway (async, don't wait)
+    # Use mock payment if MOCK_PAYMENT environment variable is set
+    mock_payment = os.getenv("MOCK_PAYMENT", "false").lower() == "true"
+    
+    if mock_payment:
+        # Mock payment for testing without real gateway
+        await asyncio.sleep(2)  # Simulate gateway delay
+        booking.payment_id = f"mock_pay_{booking.id}"
+        booking.status = BookingStatus.CONFIRMED
+        db.commit()
+        
+        return PaymentResponse(
+            booking_id=booking.id,
+            payment_id=booking.payment_id,
+            status="confirmed",
+            message="Mock payment completed successfully."
+        )
+    
     try:
         gateway_url = f"{settings.GATEWAY_URL}/charge"
         

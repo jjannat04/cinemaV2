@@ -30,6 +30,7 @@ services:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/cinemaseat
       - GATEWAY_URL=http://gateway:9000
       - HOLD_TTL_SECONDS=300
+      - MOCK_PAYMENT=false  # Set to true to use mock payment without gateway
     depends_on:
       db:
         condition: service_healthy

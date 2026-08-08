@@ -4,7 +4,8 @@ Step-by-step payment flow test
 import requests
 import time
 
-BASE_URL = "http://localhost:8000"
+# BASE_URL = "http://localhost:8000"
+BASE_URL = "https://cinemaseat.onrender.com"
 GATEWAY_URL = "asifmahmoud414/mock-gateway:latest"
 
 print("Testing Payment Flow")

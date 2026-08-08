@@ -52,8 +52,18 @@ cinemaseat/
 
 ## Required Environment Variables
 - `DATABASE_URL`: PostgreSQL connection string
-- `GATEWAY_URL`: Mock payment gateway URL
+- `GATEWAY_URL`: Mock payment gateway URL (for local Docker deployment)
 - `HOLD_TTL_SECONDS`: Seat hold timeout in seconds (default: 300)
+- `MOCK_PAYMENT`: Set to `true` to use mock payment without real gateway (for cloud deployment)
+
+### Render Deployment Environment Variables
+For Render deployment, add these environment variables:
+```
+DATABASE_URL=postgresql://user:password@host:port/database
+GATEWAY_URL=https://your-gateway-service.onrender.com  # Optional: only if deploying gateway separately
+HOLD_TTL_SECONDS=300
+MOCK_PAYMENT=true  # Use mock payment on Render (recommended for hackathon)
+```
 
 ## Development
 
