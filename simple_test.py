@@ -5,7 +5,8 @@ import asyncio
 import aiohttp
 import time
 
-BASE_URL = "http://localhost:8000"
+# Change this to your Render URL
+BASE_URL = "https://cinemaseat.onrender.com"  # Updated with your actual URL
 
 async def test_concurrent_holds():
     """Test with 10 concurrent requests"""

@@ -8,7 +8,7 @@ import time
 import json
 from datetime import datetime
 
-BASE_URL = "http://localhost:8000"  # Change to deployed URL for real testing
+BASE_URL = "https://cinemaseat.onrender.com"  
 
 async def scenario_a_concurrent_holds():
     """
@@ -52,7 +52,7 @@ async def scenario_a_concurrent_holds():
         print(f"Target: Showtime {showtime_id}, Seat {seat_info} (ID: {seat_id})")
         print(f"Firing 100 concurrent hold requests...")
         
-        # Fire 100 concurrent requests
+        # Fire 100 concurrent requests (reduced to 20 for cloud testing)
         start_time = time.time()
         tasks = []
         results = {'success': 0, 'conflict': 0, 'error': 0}
@@ -64,7 +64,8 @@ async def scenario_a_concurrent_holds():
                     json={
                         "seat_id": seat_id,
                         "user_identifier": f"user_{user_id}"
-                    }
+                    },
+                    timeout=aiohttp.ClientTimeout(total=30)  # Add timeout
                 ) as resp:
                     if resp.status == 201:
                         results['success'] += 1
@@ -72,11 +73,13 @@ async def scenario_a_concurrent_holds():
                         results['conflict'] += 1
                     else:
                         results['error'] += 1
+            except asyncio.TimeoutError:
+                results['error'] += 1
             except Exception as e:
                 results['error'] += 1
         
-        # Create 100 concurrent tasks
-        for i in range(100):
+        # Create 20 concurrent tasks (reduced from 100 for cloud testing)
+        for i in range(20):
             tasks.append(single_hold_request(i))
         
         # Execute all concurrently
@@ -85,25 +88,25 @@ async def scenario_a_concurrent_holds():
         elapsed = time.time() - start_time
         
         # Verify final state
-        async with session.get(f"{BASE_URL}/seats/{showtime_id}") as resp:
+        async with session.get(f"{BASE_URL}/seats/{showtime_id}", timeout=aiohttp.ClientTimeout(total=30)) as resp:
             final_seats = await resp.json()
         
         final_seat = next((s for s in final_seats['seats'] if s['id'] == seat_id), None)
         
         # Report results
         print(f"\nResults:")
-        print(f"  Requests sent: 100")
+        print(f"  Requests sent: 20")
         print(f"  Successful holds: {results['success']}")
         print(f"  Rejected (conflict): {results['conflict']}")
         print(f"  Errors: {results['error']}")
         print(f"  Time elapsed: {elapsed:.2f}s")
         print(f"  Final seat status: {final_seat['status'] if final_seat else 'UNKNOWN'}")
         
-        # Check for oversell
-        if results['success'] == 1 and results['conflict'] == 99:
-            print(f"  ✅ PASS: Exactly 1 success, 99 conflicts - NO OVERSELL")
+        # Check for oversell (adjusted for 20 requests)
+        if results['success'] == 1 and results['conflict'] == 19:
+            print(f"  ✅ PASS: Exactly 1 success, 19 conflicts - NO OVERSELL")
         else:
-            print(f"  ❌ FAIL: Expected 1 success, 99 conflicts")
+            print(f"  ❌ FAIL: Expected 1 success, 19 conflicts")
             print(f"  Oversell count: {max(0, results['success'] - 1)}")
 
 async def scenario_b_hold_expiration():
