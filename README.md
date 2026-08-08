@@ -30,24 +30,20 @@ curl http://localhost:8000/health
 ### Frontend
 Access the frontend at `http://localhost:8000/frontend`
 
-### Initialize Database with Sample Data
-```bash
-# After starting the containers, run:
-docker-compose exec app python -m app.seed
-```
+The app seeds sample movies, showtimes and seats automatically during container startup.
 
 ## Project Structure
 ```
 cinemaseat/
-├── app/
-│   ├── main.py          # FastAPI application
-│   ├── config.py        # Configuration settings
-│   └── models.py        # Database models (to be added)
-├── tests/               # Test files (to be added)
-├── docker/
-│   └── Dockerfile       # Application container
-├── docker-compose.yml   # Multi-container setup
-└── requirements.txt     # Python dependencies
+|-- app/
+|   |-- main.py          # FastAPI application
+|   |-- config.py        # Configuration settings
+|   `-- models.py        # Database models
+|-- tests/               # Test files
+|-- docker/
+|   `-- Dockerfile       # Application container
+|-- docker-compose.yml   # Multi-container setup
+`-- requirements.txt     # Python dependencies
 ```
 
 ## Required Environment Variables
@@ -147,16 +143,16 @@ Response (200 OK):
 
 **Gateway**: asifmahmoud414/mock-gateway:latest
 
-**Spec Compliance**: ✅ Fully compliant with gateway specification
+**Gateway behavior implemented**: real `/charge` integration, background payment initiation, idempotent callbacks, and race-mode callback lookup by `booking_ref`.
 
-### Required Behaviors (All Implemented)
+### Required Behaviors
 
-1. **✅ Async Payment Handler**: `/pay` returns 202 immediately, doesn't wait for callback
-2. **✅ 200 for Duplicate Callbacks**: Always returns 200 even for duplicates
-3. **✅ Idempotent Callbacks**: Uses `event_id` for deduplication
-4. **✅ Gateway Failure Handling**: Handles 10% failure rate, 2% timeout rate
-5. **✅ Duplicate Prevention**: Duplicate callbacks don't create double payments
-6. **✅ No Double-Booking**: Callback processing checks existing booking status
+1. **Async Payment Handler**: `/pay` returns `202` after creating a pending booking; gateway charging runs in the background.
+2. **200 for Duplicate Callbacks**: Callback handler acknowledges duplicate/unknown events to avoid retry storms.
+3. **Idempotent Callbacks**: Uses `event_id` and booking status checks for deduplication.
+4. **Race Callback Support**: Falls back to gateway `booking_ref` if the callback arrives before `payment_id` is saved.
+5. **Gateway Failure Handling**: Failed/timeout charge attempts mark the booking failed and release the held seat.
+6. **No Double-Booking Goal**: Seat holds use PostgreSQL row locking and payment callbacks only confirm an existing pending booking.
 
 ### Control Headers Support
 
@@ -164,35 +160,32 @@ Environment variable `GATEWAY_TEST_MODE=deterministic` adds `X-Mock-Mode: determ
 
 ### Gateway Misbehavior Handling
 
-- **10% Failure Rate**: Booking marked as FAILED, seat released
-- **8% Duplicate Rate**: Handled via event_id deduplication  
-- **2% Timeout Rate**: Booking marked as FAILED, seat released
-- **2-15 Second Delays**: Async handler doesn't block
+- **10% Failure Rate**: Booking marked as failed, seat released.
+- **8% Duplicate Rate**: Handled via event ID and booking status checks.
+- **2% Timeout Rate**: Background charge task marks pending booking failed if no callback succeeded.
+- **2-15 Second Delays**: `/pay` does not wait for final callback completion.
+- **Race callback**: Callback can confirm by `booking_ref` before `/charge` returns.
 
-### Test Results (Local Docker)
-- Hold seat: ✅ Success
-- Initiate payment: ✅ Success (202 returned immediately)
-- Gateway callback: ✅ Delivered (HTTP 200)
-- Booking confirmation: ✅ Confirmed
-- Seat status update: ✅ Changed to "booked"
-- Duplicate callback: ✅ Handled idempotently
+### Payment Response
+
+`POST /bookings/{hold_id}/pay` returns immediately with a pending booking. `payment_id` may be `null` until the gateway `/charge` response or callback is processed.
+
+```json
+{
+  "booking_id": 1,
+  "payment_id": null,
+  "status": "pending",
+  "message": "Payment accepted. Gateway charge is running in the background."
+}
+```
 
 ## Concurrency Strategy
 - PostgreSQL row locks for seat holding
-- Advisory locks for distributed coordination
 - Idempotent callback handling to prevent duplicate bookings
+- Expired holds are released from request paths as well as the periodic cleanup thread
 
-## Load Testing Results
+## Required Proof Still To Run Before Submission
 
-**Note**: Due to free tier cloud resource limitations, concurrency was tested with 20 concurrent requests instead of 100. The same logic prevents double-booking regardless of the number of concurrent requests.
-
-**Test Results (on Render)**:
-- Health Check: ✅ PASS (200 in <1s)
-- Movies Endpoint: ✅ PASS
-- Showtimes Endpoint: ✅ PASS
-- Seat Map: ✅ PASS
-- Seat Hold: ✅ PASS
-- Concurrent Holds (20 requests): ✅ PASS (1 success, 19 conflicts - NO OVERSELL)
-
-**Test Results (local)**:
-- The same concurrency control logic was tested locally and can handle 100+ concurrent requests when sufficient resources are available.
+- Scenario A: fire 100 concurrent hold requests for one exact seat; report 1 success, 99 clean rejections, oversell 0.
+- Scenario B: run with short `HOLD_TTL_SECONDS`, hold a seat, wait for expiry, show it becomes available and can be booked by another user.
+- Gateway forced modes: test duplicate, fail, timeout and race headers against the real gateway container.

@@ -3,15 +3,16 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 from datetime import datetime, timedelta
 from app.database import get_db
-from app.models import Seat, SeatHold, SeatStatus, Showtime, Movie
+from app.models import Seat, SeatHold, SeatStatus, Showtime, Movie, Booking, BookingStatus
 from app.schemas import HoldSeatRequest, HoldSeatResponse, SeatMapResponse, SeatResponse
 from app.config import get_settings
+from app.tasks import release_expired_holds_in_session
 
 router = APIRouter(prefix="/seats", tags=["seats"])
 settings = get_settings()
 
 @router.post("/{showtime_id}/hold", response_model=HoldSeatResponse, status_code=status.HTTP_201_CREATED)
-async def hold_seat(
+def hold_seat(
     showtime_id: int,
     request: HoldSeatRequest,
     db: Session = Depends(get_db)
@@ -35,6 +36,25 @@ async def hold_seat(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Seat not found for this showtime"
         )
+
+    expired_hold = db.execute(
+        select(SeatHold).where(
+            SeatHold.seat_id == request.seat_id,
+            SeatHold.is_active == True,
+            SeatHold.hold_expires_at <= datetime.utcnow()
+        )
+    ).scalar_one_or_none()
+    if expired_hold:
+        pending_booking = db.execute(
+            select(Booking).where(
+                Booking.hold_id == expired_hold.id,
+                Booking.status == BookingStatus.PENDING
+            )
+        ).scalar_one_or_none()
+        if pending_booking:
+            pending_booking.status = BookingStatus.FAILED
+        expired_hold.is_active = False
+        seat.status = SeatStatus.AVAILABLE
     
     # Check if seat is available
     if seat.status != SeatStatus.AVAILABLE:
@@ -85,7 +105,7 @@ async def hold_seat(
     )
 
 @router.get("/{showtime_id}", response_model=SeatMapResponse)
-async def get_seat_map(
+def get_seat_map(
     showtime_id: int,
     db: Session = Depends(get_db)
 ):
@@ -94,6 +114,9 @@ async def get_seat_map(
     
     This is a required endpoint for judging.
     """
+    if release_expired_holds_in_session(db, showtime_id=showtime_id):
+        db.commit()
+
     # Get the showtime with movie information
     showtime = db.execute(
         select(Showtime).where(Showtime.id == showtime_id)

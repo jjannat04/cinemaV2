@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, 
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 from datetime import datetime
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.models import SeatHold, Booking, Seat, BookingStatus, SeatStatus
 from app.schemas import PaymentRequest, PaymentResponse, GatewayCallback, BookingResponse
 from app.config import get_settings
@@ -10,15 +10,84 @@ import httpx
 import logging
 import os
 import asyncio
+import time
 
 router = APIRouter(prefix="/bookings", tags=["bookings"])
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
+def _release_booking_seat(db: Session, booking: Booking):
+    hold = db.execute(
+        select(SeatHold).where(SeatHold.id == booking.hold_id)
+    ).scalar_one_or_none()
+    if not hold:
+        return
+
+    seat = db.execute(
+        select(Seat).where(Seat.id == hold.seat_id).with_for_update()
+    ).scalar_one_or_none()
+    if seat and seat.status == SeatStatus.HELD:
+        seat.status = SeatStatus.AVAILABLE
+    hold.is_active = False
+
+async def _charge_gateway_for_booking(booking_id: int, callback_url: str):
+    db = SessionLocal()
+    try:
+        booking = db.execute(
+            select(Booking).where(Booking.id == booking_id)
+        ).scalar_one_or_none()
+        if not booking or booking.status != BookingStatus.PENDING:
+            return
+
+        gateway_url = f"{settings.GATEWAY_URL}/charge"
+        payload = {
+            "amount": float(booking.amount),
+            "currency": "BDT",
+            "booking_ref": str(booking.id),
+            "callback_url": callback_url
+        }
+        headers = {}
+        if os.getenv("GATEWAY_TEST_MODE") == "deterministic":
+            headers["X-Mock-Mode"] = "deterministic"
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(gateway_url, json=payload, headers=headers, timeout=5.0)
+
+        if response.status_code == 202:
+            payment_id = response.json().get("payment_id")
+            latest = db.execute(
+                select(Booking).where(Booking.id == booking_id).with_for_update()
+            ).scalar_one_or_none()
+            if latest and payment_id and not latest.payment_id:
+                latest.payment_id = payment_id
+                db.commit()
+            return
+
+        latest = db.execute(
+            select(Booking).where(Booking.id == booking_id).with_for_update()
+        ).scalar_one_or_none()
+        if latest and latest.status == BookingStatus.PENDING:
+            latest.status = BookingStatus.FAILED
+            _release_booking_seat(db, latest)
+            db.commit()
+    except Exception as e:
+        logger.error(f"Gateway charge failed for booking {booking_id}: {str(e)}")
+        db.rollback()
+        latest = db.execute(
+            select(Booking).where(Booking.id == booking_id).with_for_update()
+        ).scalar_one_or_none()
+        if latest and latest.status == BookingStatus.PENDING and not latest.callback_received:
+            latest.status = BookingStatus.FAILED
+            _release_booking_seat(db, latest)
+            db.commit()
+    finally:
+        db.close()
+
 @router.post("/{hold_id}/pay", response_model=PaymentResponse, status_code=status.HTTP_202_ACCEPTED)
-async def initiate_payment(
+def initiate_payment(
     hold_id: int,
     request: PaymentRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
     """
@@ -90,15 +159,15 @@ async def initiate_payment(
     db.commit()
     db.refresh(booking)
     
-    # Call payment gateway (async, don't wait)
-    # Use mock payment if MOCK_PAYMENT environment variable is set
     mock_payment = os.getenv("MOCK_PAYMENT", "false").lower() == "true"
     
     if mock_payment:
         # Mock payment for testing without real gateway
-        await asyncio.sleep(2)  # Simulate gateway delay
+        time.sleep(2)  # Simulate gateway delay
         booking.payment_id = f"mock_pay_{booking.id}"
         booking.status = BookingStatus.CONFIRMED
+        seat.status = SeatStatus.BOOKED
+        hold.is_active = False
         db.commit()
         
         return PaymentResponse(
@@ -107,71 +176,23 @@ async def initiate_payment(
             status="confirmed",
             message="Mock payment completed successfully."
         )
-    
-    try:
-        gateway_url = f"{settings.GATEWAY_URL}/charge"
-        
-        # IMPORTANT: callback_url must be reachable from inside the gateway container
-        # Use the Docker service name "app" instead of localhost
-        # If client sends localhost, replace it with the service name
-        callback_url = request.callback_url
-        if "localhost" in callback_url:
-            callback_url = callback_url.replace("localhost", "app")
-        elif "127.0.0.1" in callback_url:
-            callback_url = callback_url.replace("127.0.0.1", "app")
-        
-        payload = {
-            "amount": float(seat.price),
-            "currency": "BDT",  # Gateway expects BDT currency
-            "booking_ref": str(booking.id),
-            "callback_url": callback_url
-        }
-        
-        # Add control headers for testing (as per gateway specification)
-        headers = {}
-        if os.getenv("GATEWAY_TEST_MODE") == "deterministic":
-            headers["X-Mock-Mode"] = "deterministic"
-        
-        async with httpx.AsyncClient() as client:
-            response = await client.post(gateway_url, json=payload, headers=headers, timeout=5.0)
-            
-            if response.status_code == 202:
-                gateway_data = response.json()
-                booking.payment_id = gateway_data.get("payment_id")
-                db.commit()
-                
-                return PaymentResponse(
-                    booking_id=booking.id,
-                    payment_id=booking.payment_id,
-                    status="pending",
-                    message="Payment initiated. Waiting for gateway callback."
-                )
-            else:
-                booking.status = BookingStatus.FAILED
-                db.commit()
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail="Failed to initiate payment with gateway"
-                )
-                
-    except httpx.TimeoutException:
-        booking.status = BookingStatus.FAILED
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="Gateway timeout"
-        )
-    except Exception as e:
-        booking.status = BookingStatus.FAILED
-        db.commit()
-        logger.error(f"Payment initiation error: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error during payment initiation"
-        )
+
+    callback_url = request.callback_url
+    if "localhost" in callback_url:
+        callback_url = callback_url.replace("localhost", "app")
+    elif "127.0.0.1" in callback_url:
+        callback_url = callback_url.replace("127.0.0.1", "app")
+
+    background_tasks.add_task(_charge_gateway_for_booking, booking.id, callback_url)
+    return PaymentResponse(
+        booking_id=booking.id,
+        payment_id=None,
+        status="pending",
+        message="Payment accepted. Gateway charge is running in the background."
+    )
 
 @router.post("/callback")
-async def payment_callback(
+def payment_callback(
     callback: GatewayCallback,
     db: Session = Depends(get_db)
 ):
@@ -184,10 +205,23 @@ async def payment_callback(
     Uses event_id for deduplication as per gateway specification.
     """
     try:
-        # Find booking by payment_id
+        # Find booking by payment_id. Race-mode callbacks can arrive before
+        # /charge returns, so fall back to the booking_ref we supplied.
         booking = db.execute(
             select(Booking).where(Booking.payment_id == callback.payment_id)
         ).scalar_one_or_none()
+
+        if not booking:
+            try:
+                booking_id = int(callback.booking_ref)
+            except ValueError:
+                booking_id = None
+            if booking_id is not None:
+                booking = db.execute(
+                    select(Booking).where(Booking.id == booking_id)
+                ).scalar_one_or_none()
+                if booking and not booking.payment_id:
+                    booking.payment_id = callback.payment_id
         
         if not booking:
             logger.warning(f"Callback for unknown payment_id: {callback.payment_id}")
@@ -236,34 +270,14 @@ async def payment_callback(
             booking.callback_received = True
             
             # Release the seat
-            hold = db.execute(
-                select(SeatHold).where(SeatHold.id == booking.hold_id)
-            ).scalar_one_or_none()
-            
-            if hold:
-                seat = db.execute(
-                    select(Seat).where(Seat.id == hold.seat_id)
-                ).scalar_one_or_none()
-                if seat:
-                    seat.status = SeatStatus.AVAILABLE
-                    hold.is_active = False
+            _release_booking_seat(db, booking)
                     
         elif callback.status == "REFUNDED":
             booking.status = BookingStatus.REFUNDED
             booking.callback_received = True
             
             # Release the seat
-            hold = db.execute(
-                select(SeatHold).where(SeatHold.id == booking.hold_id)
-            ).scalar_one_or_none()
-            
-            if hold:
-                seat = db.execute(
-                    select(Seat).where(Seat.id == hold.seat_id)
-                ).scalar_one_or_none()
-                if seat:
-                    seat.status = SeatStatus.AVAILABLE
-                    hold.is_active = False
+            _release_booking_seat(db, booking)
         
         db.commit()
         
@@ -322,7 +336,7 @@ async def reset_system(db: Session = Depends(get_db)):
         )
 
 @router.get("/{booking_id}", response_model=BookingResponse)
-async def get_booking(booking_id: int, db: Session = Depends(get_db)):
+def get_booking(booking_id: int, db: Session = Depends(get_db)):
     """Get booking details"""
     booking = db.execute(
         select(Booking).where(Booking.id == booking_id)

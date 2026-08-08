@@ -71,7 +71,7 @@ class PaymentRequest(BaseModel):
 
 class PaymentResponse(BaseModel):
     booking_id: int
-    payment_id: str
+    payment_id: Optional[str] = None
     status: str
     message: str
 

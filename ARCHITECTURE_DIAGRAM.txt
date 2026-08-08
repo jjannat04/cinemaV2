@@ -1,0 +1,626 @@
+CinemaSeat System Architecture Diagram
+======================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              USER LAYER                                        │
+│                                                                              │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                   │
+│  │   BROWSER    │    │  MOBILE APP  │    │ LOAD TESTER  │                   │
+│  │  (Frontend)  │    │              │    │   (k6/locust) │                   │
+│  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘                   │
+└─────────┼──────────────────┼──────────────────┼─────────────────────────────┘
+          │                  │                  │
+          └──────────────────┼──────────────────┘
+                             │ HTTP/HTTPS
+┌────────────────────────────┼───────────────────────────────────────────────┐
+│                        APPLICATION LAYER                                    │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                   OPTIONAL: NGINX LOAD BALANCER                        │  │
+│  │                   (Port 80/443 → Port 8000)                           │  │
+│  └────────────────────────────────┬───────────────────────────────────────┘  │
+│                                   │                                          │
+│  ┌────────────────────────────────▼──────────────────────────────────────┐  │
+│  │                     FASTAPI APPLICATION                               │  │
+│  │                    (Python 3.12, Port 8000)                            │  │
+│  │                                                                      │  │
+│  │  ┌──────────────────────────────────────────────────────────────┐  │  │
+│  │  │  API LAYER                                                    │  │  │
+│  │  │  ┌────────────┐  ┌────────────┐  ┌────────────┐               │  │  │
+│  │  │  │   seats    │  │  bookings  │  │   movies   │               │  │  │
+│  │  │  │   router   │  │   router   │  │   router   │               │  │  │
+│  │  │  └────────────┘  └────────────┘  └────────────┘               │  │  │
+│  │  └──────────────────────────────────────────────────────────────┘  │  │
+│  │                                                                      │  │
+│  │  ┌──────────────────────────────────────────────────────────────┐  │  │
+│  │  │  BUSINESS LOGIC LAYER                                         │  │  │
+│  │  │  • Concurrency Control (SELECT FOR UPDATE)                    │  │  │
+│  │  │  • Idempotent Callback Handling                               │  │  │
+│  │  │  • Background Payment Processing                               │  │  │
+│  │  │  • TTL-based Hold Expiration                                  │  │  │
+│  │  └──────────────────────────────────────────────────────────────┘  │  │
+│  │                                                                      │  │
+│  │  ┌──────────────────────────────────────────────────────────────┐  │  │
+│  │  │  DATA ACCESS LAYER                                            │  │  │
+│  │  │  • SQLAlchemy ORM                                             │  │  │
+│  │  │  • Connection Pooling                                         │  │  │
+│  │  │  • Transaction Management                                      │  │  │
+│  │  └──────────────────────────────────────────────────────────────┘  │  │
+│  └────────────────────────────────┬───────────────────────────────────┘  │
+│                                   │                                      │
+└───────────────────────────────────┼──────────────────────────────────────┘
+                                    │
+          ┌─────────────────────────┼─────────────────────────┐
+          │                         │                         │
+┌─────────▼──────────┐    ┌────────▼────────┐    ┌───────────▼──────────┐
+│   POSTGRESQL       │    │   MOCK GATEWAY   │    │   STATIC FILES       │
+│   DATABASE         │    │   (Payment)      │    │   (Frontend HTML)    │
+│                    │    │                  │    │                      │
+│  • Movies          │    │  • /charge       │    │  • index.html        │
+│  • Theatres        │    │  • /callback     │    │  • JavaScript        │
+│  • Showtimes       │    │  • Delays: 2-15s │    │  • CSS               │
+│  • Seats           │    │  • 10% failure   │    │                      │
+│  • SeatHolds       │    │  • 8% duplicate  │    │                      │
+│  • Bookings        │    │                  │    │                      │
+│                    │    │                  │    │                      │
+│  Port: 5432        │    │  Port: 9000      │    │  Served via FastAPI   │
+│  Row Locking       │    │  Required Spec   │    │  /frontend endpoint  │
+└────────────────────┘    └──────────────────┘    └──────────────────────┘
+
+DOCKER NETWORK: cinemaseat_default
+====================================
+
+Container Communication:
+- app → db: postgresql://postgres:postgres@db:5432/cinemaseat
+- app → gateway: http://gateway:9000
+- gateway → app: http://app:8000/bookings/callback
+
+
+CORE WORKFLOW: SEAT BOOKING
+============================
+
+Step 1: Browse Movies
+User → GET /movies → FastAPI → PostgreSQL → JSON Response
+
+Step 2: Select Showtime  
+User → GET /movies/{id}/showtimes → FastAPI → PostgreSQL → JSON Response
+
+Step 3: View Seat Map
+User → GET /seats/{showtime_id} → FastAPI → PostgreSQL → Seat Availability
+           ↓
+    Cleanup expired holds (in-session)
+           ↓
+    Return seat map with statuses
+
+Step 4: Hold Seat (CRITICAL - Concurrency Control)
+User → POST /seats/{showtime_id}/hold
+           ↓
+    SELECT seat FROM seats WHERE id=X FOR UPDATE  🔒 LOCK
+           ↓
+    Check seat.status == AVAILABLE
+           ↓
+    Check no active holds exist
+           ↓
+    CREATE seat_hold (with TTL)
+           ↓
+    UPDATE seat.status = HELD
+           ↓
+    COMMIT (releases lock)
+           ↓
+    Return 201 Created
+
+Step 5: Initiate Payment
+User → POST /bookings/{hold_id}/pay
+           ↓
+    SELECT hold FROM seat_holds WHERE id=X FOR UPDATE 🔒 LOCK
+           ↓
+    Check hold.is_active AND hold_expires_at > now
+           ↓
+    CREATE booking (status=PENDING)
+           ↓
+    COMMIT
+           ↓
+    Return 202 Accepted
+           ↓
+    START BACKGROUND TASK: charge_gateway()
+
+Step 6: Background Payment Processing
+Background Task → POST gateway/charge
+           ↓
+    Payload: {amount, booking_ref, callback_url}
+           ↓
+    Gateway returns 202 + payment_id
+           ↓
+    UPDATE booking.payment_id = payment_id
+           ↓
+    Gateway processes payment (2-15 seconds)
+           ↓
+    Gateway sends callback
+
+Step 7: Payment Callback (Idempotent)
+Gateway → POST /bookings/callback
+           ↓
+    Find booking by payment_id OR booking_ref
+           ↓
+    Check if event_id already processed
+           ↓
+    IF success:
+        UPDATE booking.status = CONFIRMED
+        UPDATE seat.status = BOOKED
+        UPDATE hold.is_active = false
+    IF failure:
+        UPDATE booking.status = FAILED
+        UPDATE seat.status = AVAILABLE
+        UPDATE hold.is_active = false
+           ↓
+    Return 200 (always, to prevent retries)
+
+Step 8: Background Cleanup (Every 60 seconds)
+Scheduler → release_expired_holds()
+           ↓
+    FIND holds WHERE expires_at < now
+           ↓
+    UPDATE seat.status = AVAILABLE
+           ↓
+    UPDATE hold.is_active = false
+           ↓
+    CANCEL pending bookings
+
+
+CONCURRENCY CONTROL MECHANISMS
+===============================
+
+1. PostgreSQL Row Locking (SELECT FOR UPDATE)
+   ┌─────────────────────────────────────────────────────────┐
+   │  Request 1: SELECT seat WHERE id=1 FOR UPDATE          │
+   │              ✅ Lock acquired                            │
+   │              Check status: AVAILABLE                     │
+   │              Update status: HELD                        │
+   │              COMMIT                                    │
+   │              ✅ Lock released                            │
+   │                                                          │
+   │  Request 2: SELECT seat WHERE id=1 FOR UPDATE          │
+   │              ⏳ Waiting for lock...                     │
+   │              ✅ Lock acquired                            │
+   │              Check status: HELD ❌                      │
+   │              Return 409 Conflict                        │
+   │              ROLLBACK                                   │
+   └─────────────────────────────────────────────────────────┘
+
+2. Idempotent Callback Handling
+   ┌─────────────────────────────────────────────────────────┐
+   │  Callback 1: event_id="abc123", payment_id="pay_456"    │
+   │              ✅ Processed                                │
+   │              UPDATE booking.event_id = "abc123"         │
+   │              UPDATE booking.status = CONFIRMED         │
+   │                                                          │
+   │  Callback 2: event_id="abc123", payment_id="pay_456"    │
+   │              ⚠️ Duplicate detected                       │
+   │              booking.event_id == "abc123" ✅            │
+   │              Return 200 (no changes)                     │
+   └─────────────────────────────────────────────────────────┘
+
+3. TTL-based Expiration
+   ┌─────────────────────────────────────────────────────────┐
+   │  Hold created at 10:00:00                                │
+   │  HOLD_TTL_SECONDS = 300 (5 minutes)                     │
+   │  Expires at 10:05:00                                     │
+   │                                                          │
+   │  At 10:05:01:                                            │
+   │  - Request path cleanup runs                            │
+   │  - Background scheduler runs                             │
+   │  - Seat status: HELD → AVAILABLE                        │
+   │  - Hold.is_active: true → false                          │
+   └─────────────────────────────────────────────────────────┘
+
+
+DOCKER CONTAINER DETAILS
+========================
+
+Container 1: db (PostgreSQL)
+-----------------------------
+Image: postgres:15-alpine
+Purpose: Relational database with ACID compliance
+Features:
+  • Row-level locking (SELECT FOR UPDATE)
+  • Advisory locks for cross-process coordination
+  • Persistent data volume
+  • Health check (pg_isready)
+Environment:
+  • POSTGRES_USER=postgres
+  • POSTGRES_PASSWORD=postgres
+  • POSTGRES_DB=cinemaseat
+Volumes:
+  • postgres_data → /var/lib/postgresql/data
+Ports:
+  • 5432:5432
+
+Why Containerized?
+  • Isolation from host system
+  • Reproducible database setup
+  • Easy version management
+  • Health check integration
+  • Data persistence via volumes
+
+Container 2: gateway (Mock Payment Gateway)
+--------------------------------------------
+Image: asifmahmoud414/mock-gateway:latest
+Purpose: Simulate real payment gateway behavior
+Features:
+  • Realistic delays (2-15 seconds)
+  • Failure simulation (10% rate)
+  • Duplicate callback simulation (8% rate)
+  • Timeout simulation (2% rate)
+  • Deterministic mode for testing
+Environment:
+  • GATEWAY_TEST_MODE=deterministic (for reliable testing)
+Ports:
+  • 9000:9000
+
+Why Containerized?
+  • Required by problem statement (no custom mocks)
+  • Isolated failure domain
+  • Can be stopped for fault isolation testing
+  • Reproducible behavior across environments
+
+Container 3: app (FastAPI Application)
+--------------------------------------
+Image: Built from docker/Dockerfile
+Base: python:3.12-slim
+Purpose: Main application logic
+Features:
+  • FastAPI web framework
+  • SQLAlchemy ORM
+  • Async payment processing
+  • Background task scheduler
+  • Static file serving
+Environment:
+  • DATABASE_URL=postgresql://postgres:postgres@db:5432/cinemaseat
+  • GATEWAY_URL=http://gateway:9000
+  • HOLD_TTL_SECONDS=300
+  • MOCK_PAYMENT=false
+  • GATEWAY_TEST_MODE=deterministic
+Ports:
+  • 8000:8000
+Volumes:
+  • ./app:/app/app (development hot reload)
+
+Why Containerized?
+  • Dependency isolation
+  • Reproducible runtime environment
+  • Easy deployment
+  • Scalability (can scale horizontally)
+  • Works on any OS with Docker
+
+
+WHY NO MICROSERVICES?
+====================
+
+Monolithic Architecture Advantages for This Project:
+
+1. SIMPLICITY
+   ✅ Single codebase to understand and debug
+   ✅ Single database transaction context
+   ✅ No inter-service network latency
+   ✅ Easier to build in 8-hour hackathon
+
+2. PERFORMANCE
+   ✅ No network overhead between components
+   ✅ Direct database access (no service layer)
+   ✅ Faster development iteration
+
+3. CORRECTNESS
+   ✅ ACID transactions across booking flow
+   ✅ No distributed transaction complexity
+   ✅ PostgreSQL row locks work seamlessly
+
+4. DEPLOYMENT
+   ✅ Single docker-compose up command
+   ✅ No service discovery needed
+   ✅ simpler monitoring and logging
+
+5. TEAM SIZE
+   ✅ Single team can manage entire codebase
+   ✅ No need for independent deployment cycles
+
+When Would Microservices Be Better?
+❌ Different teams need different deployment cycles
+❌ Services have vastly different scaling requirements
+❌ Different technology stacks are needed
+❌ System is too large for single team
+
+Trade-offs Accepted:
+❌ Independent scaling (vertical scaling sufficient)
+❌ Technology flexibility (Python works for all)
+❌ Fault isolation (containerization provides some)
+
+
+DATA MODEL RELATIONSHIPS
+========================
+
+Movie (1) ←─────── (Many) Showtime (Many) ───────→ (1) Theatre
+  │                                                 │
+  │                                                 │
+  │                                                 │
+  └─────────────────────────────────────────────────┘
+                          │
+                          │ 1
+                          │
+                          │ *
+                    Showtime
+                          │
+                          │ 1
+                          │
+                          │ *
+                       Seat
+                          │
+                          │ 1
+                          │
+                          │ *
+                    SeatHold
+                          │
+                          │ 1
+                          │
+                          │
+                    Booking
+
+Entity Details:
+---------------
+Movie:       id, title, description, duration_minutes
+Theatre:     id, name, total_rows, seats_per_row
+Showtime:    id, movie_id, theatre_id, start_time, price
+Seat:        id, showtime_id, row_letter, seat_number, status, price
+SeatHold:    id, seat_id, user_identifier, hold_started_at, hold_expires_at, is_active
+Booking:     id, showtime_id, hold_id, user_identifier, payment_id, event_id, amount, status
+
+
+CI/CD PIPELINE
+==============
+
+GitHub Actions Workflow:
+
+┌─────────────────────────────────────────────────────────────┐
+│                    PUSH/PR to main/master                    │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│  TEST JOB (Runs on PR and Push)                             │
+├─────────────────────────────────────────────────────────────┤
+│  1. Checkout code                                            │
+│  2. Set up Python 3.12                                       │
+│  3. Install dependencies                                    │
+│  4. Start PostgreSQL service                                │
+│  5. Run pytest with coverage                                │
+│  6. Upload coverage to Codecov                               │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼ (only on push to main)
+┌─────────────────────────────────────────────────────────────┐
+│  BUILD JOB (Runs only on push to main)                      │
+├─────────────────────────────────────────────────────────────┤
+│  1. Checkout code                                            │
+│  2. Set up Docker Buildx                                     │
+│  3. Build Docker image                                       │
+│  4. Test docker-compose up                                  │
+│  5. Verify health check                                     │
+│  6. Teardown containers                                      │
+└─────────────────────────────────────────────────────────────┘
+
+Quality Gates:
+- Code must pass tests before merging
+- Only main branch builds containers
+- Docker Compose must work from clean clone
+
+
+TESTING SCENARIOS
+=================
+
+Scenario A: One Seat, Many Buyers (REQUIRED)
+--------------------------------------------
+Setup:
+  • Pick one seat on one showtime
+  • Fire 100 concurrent hold requests for that exact seat
+  • Single burst (not spread over time)
+
+Expected Results:
+  • 1 successful hold
+  • 99 rejections (409 Conflict)
+  • 0 oversells (seat held exactly once)
+
+How Achieved:
+  • PostgreSQL SELECT FOR UPDATE row locking
+  • Only one transaction can hold the lock at a time
+  • Atomic check-and-update operation
+
+Scenario B: Abandoned Hold (REQUIRED)
+--------------------------------------
+Setup:
+  • Set HOLD_TTL_SECONDS to short value (e.g., 10)
+  • Hold a seat
+  • Wait for expiration
+  • Try to book the same seat with different user
+
+Expected Results:
+  • Hold expires after TTL
+  • Seat status changes from HELD to AVAILABLE
+  • New user can successfully hold the seat
+  • Timeline documented
+
+How Achieved:
+  • Background cleanup scheduler (every 60 seconds)
+  • Request-path cleanup (on every seat map request)
+  • TTL-based hold expiration
+
+Scenario C: Find Breakpoint (BONUS)
+------------------------------------
+Setup:
+  • Ramp virtual users on seat map and hold endpoints
+  • Monitor p95 latency and error rates
+  • Run from different machine (not same as app)
+
+Expected Results:
+  • Report where p95 latency turns upward
+  • Report where errors begin
+  • Explain the bottleneck (connection pool, DB contention, etc.)
+
+How Achieved:
+  • Load testing with k6 or locust
+  • Monitor application metrics
+  • Analyze bottleneck and explain
+
+
+KEY FILES REFERENCE
+===================
+
+Application Entry Point:
+  app/main.py - FastAPI app, CORS, lifespan, health check
+
+Configuration:
+  app/config.py - Environment variables and settings
+
+Database:
+  app/database.py - Connection pooling and session management
+  app/models.py - SQLAlchemy ORM models
+
+API Routes:
+  app/routers/seats.py - Seat hold and seat map endpoints
+  app/routers/bookings.py - Payment and callback handling
+  app/routers/movies.py - Movie and showtime endpoints
+
+Background Tasks:
+  app/tasks.py - Cleanup scheduler for expired holds
+
+Validation:
+  app/schemas.py - Pydantic request/response schemas
+
+Containerization:
+  docker/Dockerfile - Application container definition
+  docker-compose.yml - Multi-container orchestration
+
+Testing:
+  tests/test_concurrency.py - Concurrency and race condition tests
+
+CI/CD:
+  .github/workflows/ci.yml - GitHub Actions pipeline
+
+Documentation:
+  README.md - Project overview and quick start
+  ARCHITECTURE.md - Technical architecture details
+  DECISIONS.md - Design decisions and trade-offs
+  DEPLOYMENT.md - Deployment guide
+  PRESENTATION.md - This presentation document
+
+
+ENVIRONMENT VARIABLES
+======================
+
+Required:
+  DATABASE_URL=postgresql://user:pass@host:port/db
+  GATEWAY_URL=http://gateway:9000
+
+Optional:
+  HOLD_TTL_SECONDS=300 (default)
+  MOCK_PAYMENT=false (default)
+  GATEWAY_TEST_MODE=deterministic (for testing)
+  TEST_RETRY_LOGIC=false (for testing)
+
+
+QUICK START COMMANDS
+====================
+
+Local Development:
+  docker-compose up
+
+Health Check:
+  curl http://localhost:8000/health
+
+Browse Movies:
+  curl http://localhost:8000/movies
+
+Get Seat Map:
+  curl http://localhost:8000/seats/1
+
+Hold a Seat:
+  curl -X POST http://localhost:8000/seats/1/hold \
+    -H "Content-Type: application/json" \
+    -d '{"seat_id": 1, "user_identifier": "user123"}'
+
+Initiate Payment:
+  curl -X POST http://localhost:8000/bookings/1/pay \
+    -H "Content-Type: application/json" \
+    -d '{"callback_url": "http://app:8000/bookings/callback"}'
+
+Run Tests:
+  pytest tests/ -v --cov=app
+
+Stop Everything:
+  docker-compose down -v
+
+
+SUCCESS METRICS
+===============
+
+Functional:
+  ✅ No double-booking under any load
+  ✅ Hold expiration works correctly
+  ✅ Payment processing is reliable
+  ✅ Idempotent callback handling
+
+Technical:
+  ✅ Health check returns 200 in under 1 second
+  ✅ Docker Compose works from clean clone
+  ✅ All tests pass
+  ✅ Code coverage acceptable
+
+Deployment:
+  ✅ System deployed and reachable
+  ✅ Public GitHub repository
+  ✅ Documentation complete
+
+
+PRESENTATION TIPS
+=================
+
+Key Points to Emphasize:
+1. Correctness over complexity - system never double-books
+2. Simplicity over microservices - right choice for hackathon
+3. Database-level concurrency control - PostgreSQL row locks
+4. Async payment processing - required by problem statement
+5. Idempotent design - handles real-world gateway behavior
+
+Questions to Anticipate:
+Q: Why not Redis for locking?
+A: PostgreSQL row locks are sufficient and simpler
+
+Q: Why monolithic not microservices?
+A: Simpler, faster, adequate for hackathon scope
+
+Q: How do you handle concurrent holds?
+A: SELECT FOR UPDATE ensures only one succeeds
+
+Q: What if gateway fails?
+A: Background task marks booking failed, releases seat
+
+Q: Why async payment?
+A: Required by spec, better UX, more scalable
+
+Q: How do you handle duplicate callbacks?
+A: Event ID deduplication in database
+
+
+CONCLUSION
+==========
+
+CinemaSeat is a pragmatic, correctly-functioning cinema booking system
+that prioritizes:
+  • Data correctness (no double-booking)
+  • Simplicity (monolithic, single database)
+  • Reliability (containerization, health checks)
+  • Testability (unit tests, integration tests)
+
+The system successfully handles the core challenge: high-concurrency
+seat booking without selling the same seat twice.
+
+Built for Zero to Production Hackathon
+Focus: Core functionality over extensive features
