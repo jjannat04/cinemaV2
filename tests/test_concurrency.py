@@ -11,11 +11,21 @@ from app.config import get_settings
 from datetime import datetime, timedelta
 import os
 
-# Use in-memory SQLite for testing
-TEST_DATABASE_URL = "sqlite:///./test.db"
+# Use the CI PostgreSQL service when DATABASE_URL is provided. SQLite remains
+# a local fallback, but it does not model PostgreSQL row locks.
+TEST_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./test.db")
 
-engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+if TEST_DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
+else:
+    engine = create_engine(TEST_DATABASE_URL)
+
+TestingSessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine,
+    expire_on_commit=False
+)
 
 def override_get_db():
     try:
