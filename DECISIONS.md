@@ -1,4 +1,4 @@
-# Design Decisions
+
 
 This document documents three key architectural decisions made during the development of CinemaSeat.
 
